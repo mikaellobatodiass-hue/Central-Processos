@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Quem está logado no Firebase Authentication
+    function signedIn() { return request.auth != null; }
+    // Usuário cadastrado no sistema (tem documento em /users)
+    function active() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    // Administrador: acesso total
+    function admin() {
+      return active() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.admin == true;
+    }
+    // Conta que vira administradora no primeiro acesso (só uma vez)
+    function bootEmail() { return request.auth.token.email == 'processos@central-igreen.app'; }
+    function bootDone() { return exists(/databases/$(database)/documents/config/boot); }
+
+    match /users/{uid} {
+      allow read: if active() || (signedIn() && request.auth.uid == uid);
+      allow create: if admin()
+        || (signedIn() && request.auth.uid == uid && bootEmail() && !bootDone()
+            && existsAfter(/databases/$(database)/documents/config/boot)
+            && request.resource.data.admin == true);
+      allow update, delete: if admin();
+    }
+
+    match /config/boot {
+      allow read: if signedIn();
+      allow create: if signedIn() && bootEmail() && !bootDone()
+        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    match /config/settings {
+      allow read: if active();
+      allow write: if admin();
+    }
+
+    match /weeks/{weekId} {
+      allow read: if active();
+      allow create: if admin() || (active() && request.resource.data.fechada == false);
+      // Time comum só altera semanas abertas e não pode fechar nem reabrir
+      allow update: if admin()
+        || (active() && resource.data.fechada == false && request.resource.data.fechada == false);
+      allow delete: if admin();
+    }
+  }
+}
